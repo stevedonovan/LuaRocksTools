@@ -3,7 +3,7 @@ version = "0.5-1"
 
 source = {
   dir = "rockspecifier", 
-  url = "file://./home/steve/projects/lua/rockspecifier/rockspecifier.lua", 
+  url = "http://github.com/stevedonovan/LuaRocksTools/raw/master/rockspecifier/rockspecifier", 
 }
 
 description = {
