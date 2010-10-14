@@ -2,6 +2,10 @@
 
 The [rockspec format](http://www.luarocks.org/en/Rockspec_format) is documented, and there is an excellent [tutorial](http://www.luarocks.org/en/Creating_a_rock) for authoring rockspecs.  It can be however a little awkward to get going when writing rockspecs, especially if you do not wish to make a career out of this activity.
 
+Installing via LuaRocks:
+
+     $ sudo luarocks install  http://github.com/stevedonovan/LuaRocksTools/raw/master/rockspecifier/rockspecifier-0.5-1.rockspec
+
 A rockspec name follows a certain pattern, which must be consistent with its contents.  it is `NAME-PVERSION-RVERSION` where `PVERSION` is the package version (e.g. 0.5) and `RVERSION` is the rockspec version (e.g. 1 or 2)
 
 It serves to provide:
