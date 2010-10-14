@@ -8,7 +8,7 @@ source = {
 
 description = {
   summary = "Command-line tool for generating rockspecs", 
-  homepage = "http://gitub.com/stevedonovan/LuaRocksTools/blob/master/rockspecifier", 
+  homepage = "http://github.com/stevedonovan/LuaRocksTools/blob/master/rockspecifier", 
   license = "MIT/X11", 
   maintainer = "steve.j.donovan@gmail.com", 
   detailed = [[
