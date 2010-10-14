@@ -7,12 +7,13 @@ source = {
 }
 
 description = {
-  summary = "short sentence about this package", 
-  homepage = "package homepage", 
+  summary = "Command-line tool for generating rockspecs", 
+  homepage = "http://gitub.com/stevedonovan/LuaRocksTools/blob/master/rockspecifier", 
   license = "MIT/X11", 
-  maintainer = "your email", 
+  maintainer = "steve.j.donovan@gmail.com", 
   detailed = [[
-paragraph about this package
+Rockspecifier interactively allows a user to create a rockspec for their Lua modules
+and scripts. It simplifies the initial generation and understands external dependencies for C modules.
 ]]
 }
 
