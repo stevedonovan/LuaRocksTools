@@ -1,0 +1,620 @@
+#!/usr/bin/env lua
+require 'pl'
+require 'lfs'
+local util = require("luarocks.util")
+
+--- LIBS SECTION (search for END-LIBS for actual program logic) -----
+
+local tree = {}
+
+local function parse_fieldspec (fieldspec)
+    local ls
+    if type(fieldspec) == 'string' then
+        ls = utils.split(fieldspec,'%.')
+    elseif type(fieldspec) == 'table' then
+        ls = fieldspec
+    else
+        error("fieldspec is either a string or a table")
+    end
+    return ls
+end
+
+-- set a global expression of the form 'a.b.c' to a value;
+-- create intermediate tables if needed.
+function tree.set (t,fieldspec,value,do_copy)
+    local ls = parse_fieldspec(fieldspec)
+    local n = #ls
+    if do_copy then value = tablex.deepcopy(value) end
+    for i = 1,n do
+        local field = ls[i]
+        if i < n then
+            if t[field] == nil then t[field] = {} end
+            t = t[field]
+        else
+            t[field] = value
+        end
+    end
+    return value
+end
+
+function tree.copy (t,fieldspec,value)
+    return tree.set(t,fieldspec,value,true)
+end
+
+-- get the value of a global expression of the form 'a.b.c';
+-- return nil if any intermediate table is nil, unless there is a default constructor.
+function tree.get (t,fieldspec,default)
+    local ls = parse_fieldspec(fieldspec)
+    local n = #ls
+    for i = 1,n do
+        local field = ls[i]
+        if i < n then
+            if default and t[field] == nil then
+                t[field] = {}
+            end
+            t = t[field]
+            if t == nil then
+                return nil
+            end
+        else
+            if default and t[field] == nil then
+                t[field] = default()
+            end
+            return t[field]
+        end
+    end
+end
+
+
+
+local basename = path.basename
+local concat = table.concat
+local easy_mode
+
+local function quote (s)
+    return '"'..s..'"'
+end
+
+local function change_dir (path)
+    print('changing directory to '..path)
+    lfs.chdir(path)
+end
+
+local function remove_trailing_slash (path)
+    return path:gsub('[\\/]$','')
+end
+
+local function lstring (ls)
+    return concat(ls,' ')
+end
+
+-- we specifically don't use path.join because backslashes are not
+-- a good idea in rockspecs
+local function join (p1,p2)
+    if p1 == '.' then return p2
+    else return p1..'/'..p2
+    end
+end
+
+local function add_extension (rpath,ext)
+    if path.extension(rpath) ~= ext then
+        rpath = rpath..ext
+    end
+    return rpath
+end
+
+-- for debug purposes --
+local function dump_table (t)
+    print(pretty.write(t))
+end
+
+-- verification functions. These return the value (possibly massaged) if
+-- successful. Otherwise nil,error
+
+local function existing_path (p)
+    if path.isdir(p) then return p end
+    return nil,'path does not exist'
+end
+
+local function satisfies (pattern,errmsg)
+    errmsg = errmsg or 'illegal characters'
+    pattern = '^'..pattern..'$'
+    return function(s)
+        if not s:find(pattern) then
+            return nil,errmsg
+        else
+            return stringx.strip(s)
+        end
+    end
+end
+
+local non_blank = satisfies('%S+','must be non-blank string')
+
+local function non_blank_list (s)
+    local ls = List.split(s)
+    return ls
+end
+
+local function any (s)
+    return s
+end
+
+local function multiline (s)
+    return s
+end
+
+--- end of verification functions
+
+local function non_empty (t)
+    if #t == 0 then return nil else return t end
+end
+
+local inf,from_file = io.stdin,false
+local outf
+
+--- a question-asking framework ---
+-- each question is either a table:
+-- [1] the prompt string
+-- [2] the default value
+-- [3] the verification function
+-- [4] either a dotted field spec or a function
+-- or a function.
+
+local function questions (qtable)
+    local obj = qtable.obj or _G
+    for _,q in ipairs(qtable) do
+        while true do
+            if type(q) == 'function' then
+                if q() == 'break' then return 'break' end
+                break
+            else
+                local line,data,msg
+                local verify,payload = q[3],q[4]
+				local is_field = type(payload) == 'string'
+				if is_field and tree.get(obj,payload) ~= nil then
+					break
+				end
+                if easy_mode and q[5] then print(q[5]) end
+                local default = q[2]
+                if type(default) == 'table' then
+                    default = default[1]
+                    print('default was '..default)
+                end
+                io.write (q[1],'[',default,']? ')
+                line = inf:read()
+                if from_file then
+                    local _,idx = line:find('%]%?%s*')
+                    if idx then line = line:sub(idx+1) end
+                    print(line)
+                end
+                local help = line == 'h'
+                if not help then
+                    if line == '' then line = default end 
+                    if line == 'x' then return end
+                    if line == 'n' then return 'break' end
+                    data,msg = verify(line)
+                else
+                    data = nil
+                end
+                if not data then
+                    if not help then
+                        print(msg)
+                        if from_file then return 'break' end
+                    elseif q[5] then
+                        print(q[5])
+                    end
+                else
+                    outf:write(q[1],'[]? ',line,'\n')
+                    outf:flush()
+                    if is_field then
+                        tree.set(obj,payload,data)
+                    else
+                        if payload(data,obj) == 'break' then return end
+                    end
+                    break
+                end
+            end
+        end
+    end
+end
+
+local function loop (qtable)
+    return function()
+        while true do
+            local ret = questions(qtable)
+            if ret == 'break' then
+                return 'break'
+            end
+        end
+    end
+end
+
+-- END-LIBS
+
+local flags,directory = util.parse_flags(...)
+
+local base
+local version = '1.0-1'
+
+--[[
+local f = io.open('questions.txt','r')
+if f then
+    local line1,line2 = f:read(),f:read()
+    if line1 then
+        base = line1:match '%]%? (.+) '
+        version = line2:match '%]%? (.+) '  
+        print(
+    end
+    f:close()
+end
+--]]
+
+outf = io.open('questions.txt','w')
+
+easy_mode = not flags.expert
+
+directory = directory or lfs.currentdir()
+
+if path.extension(directory) == '.txt' then
+    inf = assert(io.open(directory,'r'))
+    from_file = true
+	directory = '.'
+	base = ''
+elseif not base then
+	base = path.basename(directory)
+	local name,vs = base:match('([%a_]+)%-(.+)')
+	if name then
+		base = name
+		version = vs..'-1'
+	end
+end
+
+
+local spec = {
+    description = {},
+    source = {},
+    build = {},
+    external_dependencies = {}
+}
+
+if true then -- experts prefer to edit the rockspec (was not easy_mode)
+	local descript = spec.description
+	descript.summary = "short sentence about this package"
+	descript.detailed = "paragraph about this package\n"
+	descript.license = "MIT/X11"
+end
+
+-- has to be global
+mod = {}
+
+local modules = List()
+local modtypes = {}
+local rspec_name, tarname, fullpath
+
+local function add_module(dir)
+    mod.dir = dir
+    modtypes[mod.type] = true
+    modules:append(mod)
+    mod = {}
+end
+
+-- given something like 'bonzo/dog.lua', will give the module name 'bonzo.dog'
+local function mod_name (path)
+    return path:gsub('%.lua$',''):gsub('[\\/]','.')
+end
+
+local platforms = {
+    unix = true, windows = true, win32 = true, cygwin = true, macosx = true,
+    linux = true, freebsd = true
+}
+
+local platforms_string = table.concat(tablex.keys(platforms),' ')
+
+local function valid_platform (p)
+    if not platforms[p] then return nil,'not a valid platform'
+    else return p end
+end
+
+-- modify mod.<field> intelligently. In particular, this function generator is looking for a '?' after any
+-- name in the list, and considers this a per-platform file.
+local function per_platform (field,action)
+    return function(list,mod)
+        if action then
+            local res = action(list,mod)
+            if res then return res end
+        end
+        local groups = list:partition(stringx.endswith,'?')
+        mod[field] = groups[false]  or List() -- these are the unconditional values (may be empty)
+        if groups[true] and #groups[true] > 0 then
+            for file in groups[true]:iter() do
+                file = file:sub(1,-2) -- get rid of ?
+                questions {
+                    {'what platform is '..file..' needed for','',valid_platform,
+                    function(plat)
+                        tree.copy(mod,{'platforms',plat,field},mod[field]):append(file)
+                    end,
+                    platforms_string
+                    }
+                }
+            end
+        end
+    end
+end
+
+
+print 'Rockspecifier 0.5'
+print 'Enter h for more help on any question; it will be asked again'
+print 'Press enter to accept the default value in square brackets'
+print 'Use . to refer to current directory in questions'
+print ()
+
+local module_default = {'n'}
+
+questions {
+    obj = spec,
+    { 'package name',base, satisfies('[%w%-]+'),'package',
+    'This is the package name, e.g. luafilesystem. '
+    },
+    { 'package version',version,satisfies('[%d%.%-]+'), 'version',
+    'A version of the package, in this form 0.6-1, where the "-1" is the rockspec version'
+    },
+    { 'summary','',any, 'description.summary',
+    'A short one line summary of the package'
+    },
+    { 'detailed','',multiline,'description.detailed',
+    'A descriptive paragraph describing the package'
+    },
+    { 'license','MIT/X11',non_blank, 'description.license',
+    'The licence under which this is released; the default is the same as for Lua itself'
+    },
+    {"supported platforms "..platforms_string,'',non_blank_list,"supported_platforms",
+    "The platforms on which this package is valid (may be empty)"
+    },    
+    { 'dependencies','',non_blank_list, per_platform 'dependencies',
+    'Any other LuaRocks packages which this package depends on'
+    },
+    --
+    { 'package directory',directory,existing_path,
+    function(path)
+        path = remove_trailing_slash(path)
+        fullpath = path
+        local dir = basename(path)
+        spec.package = spec.package:lower()
+        rspec_name = spec.package..'-'..spec.version
+        tarname = rspec_name..'.tar.gz'
+        spec.source.url = 'http://yoururl/'..tarname
+		spec.source.dir = dir
+        spec.description.homepage = 'package homepage'
+        spec.description.maintainer = 'your email'
+        change_dir(path)
+        
+    end,
+    'This is the directory containing the source'
+    },
+    function()
+        module_default[1] = spec.package
+        print ("Modules or scripts [" .. module_default[1] .."]\n") 
+    end,
+    --
+    loop {
+        {'module',module_default,non_blank_list,function(ls)
+            module_default[1] = 'n'
+            if #ls > 1 then
+                mod.name,mod.type = ls[1],ls[2]
+                add_module(ls[3] or '.')
+            else
+                mod.name = ls[1]                
+                questions {
+                    {'type (bin,lua,c)','lua', non_blank, 'mod.type',
+                    'LuaRocks can deliver scripts/binaries, Lua modules and C modules'
+                    },
+                    {'dir','.',existing_path, add_module,
+                    'This is the subdirectory containing the source for the module'
+                    }
+                }
+            end
+        end,
+        [[
+The name you would use for require() or invoking the script;
+you can also say  e.g frodo lua . (NAME,TYPE,DIR) if you are in a hurry
+Press enter to end (n)
+        ]]
+        },
+    }
+}
+
+
+local build = spec.build
+if modtypes['bin'] then
+    build.install = {}
+    build.type = 'none'
+end
+if modtypes['lua'] or modtypes['c'] then
+    build.modules = {}
+    build.type = 'builtin'
+end
+local mods = build.modules
+for m in modules:iter() do
+    mod = m -- have to use the global variable
+    local rpath = join(mod.dir,mod.name)
+    if m.type == 'bin' then -- command
+		-- the rules for commands are:
+		--  - a file ending in .lua is a Lua script. However, if you want to
+		--       say NAME and not NAME.lua, then it should have no extension;
+		--  - a file with no extension is assumed to be a _binary_,
+		--       unless the file begins with a Lua #! (hash-bang).
+		if not path.exists(rpath) then
+			local lfile = rpath..'.lua'
+			if path.exists(lfile) then
+				print('renaming mod.lua to mod')
+				dir.movefile(lfile,rpath)
+			end
+		end
+        build.install.bin = {[mod.name]=rpath}
+    elseif m.type == 'lua' then -- Lua module
+        if path.isdir(rpath) then -- we've been given a directory
+            for _,modfile in ipairs(dir.getfiles(rpath,'*.lua')) do
+				modfile = modfile:gsub('\\','/')
+				local file = modfile:gsub('^'..m.dir..'/','')
+                mods[mod_name(file)] = modfile
+            end
+            -- it's possible to have DIR and DIR.lua (i.e. no DIR/init.lua)
+            local m = rpath..'.lua'
+            if path.isfile(m) then
+                mods[mod.name] = m
+            end
+        else
+            if path.extension(rpath) == '.lua' then
+                rpath = path.basename()
+            end
+            -- we want a proper path from dotted module names
+            rpath,cnt = rpath:gsub('%.','/')
+            -- this little hack just makes any discovered source dirs not seen as documentation, etc
+            if cnt > 0 and mod.dir == '.' then
+                mod.dir = path.dirname(rpath)
+            end
+            mods[mod.name] = rpath..'.lua'
+        end
+    elseif m.type == 'c' then -- C module
+        mod.files = List(dir.getfiles(mod.dir,'*.c')):map(function(s)
+			if mod.dir == '.' then return s:sub(3)
+			else return s:gsub('\\','/')
+			end
+		end)
+        questions {
+            obj = mod,
+            {'files',lstring(mod.files),non_blank_list, per_platform 'sources',
+            'By default, all the source files in the specified dir, but you can edit this'
+            },
+            {'external headers','',non_blank_list,per_platform ('xheaders',function(ls)
+                if ls[1] == 'none' then -- we will skip the rest of the questions - but initialize these lists!
+                    mod.xheaders = List()
+                    mod.incdirs = List()
+                    mod.libraries = List()
+                    mod.libdirs = List()
+                    mod.defines = List()
+                    return 'break'
+                end
+            end),
+            "Does your module depend on some external library, e.g readline/readline.h? Entering 'none' means no external libs etc"
+            },
+            {'include paths','', non_blank_list, per_platform 'incdirs',
+            'Are there any extra include paths needed?'
+            },
+            {'external libraries','',non_blank_list, per_platform 'libraries',
+            'Any libraries that your module needs to link with'
+            },
+            {'library directories','',non_blank_list, per_platform 'libdirs',
+            'Any extra library directories required',
+            },
+            {'C defines','',non_blank_list, per_platform 'defines',
+            'Any C macro definitions, e.g. DEBUG NTRACE=2'
+            },
+        }
+		-- does no harm, helps with the different interpretation of #include <HEAD.h>
+		-- between cl & gcc: the former will not look in . first!
+        if not mod.incdirs then mod.incdirs = List() end
+		mod.incdirs:append '.'
+        if #mod.xheaders > 0 then
+            for header in mod.xheaders:iter() do
+				local name = basename(header)
+				name = path.splitext(name):upper()
+                spec.external_dependencies[name] = { header = header }
+
+				-- recommended practice (see http://www.luarocks.org/en/Creating_a_rock)
+				-- is to parameterize these to allow people to override library paths
+				mod.incdirs:append(('$(%s_INCDIR)'):format(name))
+				mod.libdirs:append(('$(%s_LIBDIR)'):format(name))
+            end
+        end
+
+        if not spec.build.modules then spec.build.modules = List() end
+        mods[mod.name] = {
+            sources = mod.sources,
+            libraries = non_empty(mod.libraries),
+            defines = non_empty(mod.defines),
+            incdirs = non_empty(mod.incdirs),
+            libdirs = non_empty(mod.libdirs),
+        }
+        if mod.platforms then
+            for plat,t in pairs(mod.platforms) do
+                for field,v in pairs(t) do
+                    tree.set(spec,{'build','platforms',plat,'modules',mod.name,field},v)
+                end
+            end
+        end
+    end
+end
+
+-- question: can one have a documentation-only rock?
+if #modules == 0 then
+	return print 'you did not specify any modules!'
+end
+
+local extra_message
+
+if #modules == 1 then
+    local m = modules[1]
+    local ext = '.lua'
+    if m.type == 'c' then ext = '.c' end
+    spec.source.url = "file://."..fullpath..'/'..m.name..ext
+    extra_message = "(sudo) luarocks install "..rspec_name..".rockspec"
+end
+
+-- right, now let's see if the user wants to copy any non-source directories.
+-- These are easily found using Set operations.
+-- The modules have a field 'dir', so use the table lookup operator ...
+local src_dirs = Set(modules:map('[]','dir'))
+local all_dirs = List(dir.getdirectories(lfs.currentdir()))
+all_dirs = Set(all_dirs:map(basename))
+
+-- the difference between the sets is what we need; make it a list
+local other_dirs = (all_dirs - src_dirs):keys()
+
+if #other_dirs > 0 then
+	questions {
+        obj = spec,
+		{'Directories to install',lstring(other_dirs),non_blank_list,
+		'build.copy_directories',
+		'Any directories specified here will be copied as part of the installation'
+		}
+	}
+else
+	print 'Warning: this rock contains no documentation.'
+	print 'Move any README, test.lua, etc to a directory and retry.'
+end
+
+
+--- Writing out the rockspec -----
+
+if not rspec_name then
+    return print 'aborted'
+end
+
+local rspec = rspec_name..'.rockspec'
+local f = io.open(rspec,'w')
+f:write('package = '..quote(spec.package),'\n')
+f:write('version = '..quote(spec.version),'\n\n')
+f:write('source = '..pretty.write(spec.source)..'\n\n')
+f:write('description = '..pretty.write(spec.description)..'\n\n')
+if #spec.supported_platforms > 0 then
+    f:write('supported_platforms = '..pretty.write(spec.supported_platforms)..'\n\n')
+end
+if #spec.dependencies > 0 then
+    f:write('dependencies = '..pretty.write(spec.dependencies)..'\n\n')
+end
+print(pretty.write(spec.external_dependencies))
+if next(spec.external_dependencies) then
+    f:write('external_dependencies = '..pretty.write(spec.external_dependencies)..'\n\n')
+end
+
+f:write('build = '..pretty.write(spec.build)..'\n\n')
+f:close()
+
+print(rspec .. ' has been written to ' .. fullpath)
+print 'questions.txt has been written to this directory'
+print '(sudo) luarocks make should now work'
+if extra_message then
+    print(extra_message)
+end
+
