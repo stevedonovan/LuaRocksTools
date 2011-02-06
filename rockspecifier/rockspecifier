@@ -128,6 +128,17 @@ local function satisfies (pattern,errmsg)
     end
 end
 
+local function either(vf1,vf2)
+    return function(s)
+        local res,err = vf1(s)
+        if not res then
+            res,err = vf2(s)
+            if not res then return nil,err end
+        end
+        return res
+    end
+end
+
 local non_blank = satisfies('%S+','must be non-blank string')
 
 local function non_blank_list (s)
@@ -342,7 +353,7 @@ local function per_platform (field,action)
 end
 
 
-print 'Rockspecifier 0.5'
+print 'Rockspecifier 0.6'
 print 'Enter h for more help on any question; it will be asked again'
 print 'Press enter to accept the default value in square brackets'
 print 'Use . to refer to current directory in questions'
@@ -355,8 +366,8 @@ questions {
     { 'package name', base,  satisfies('[%w%-]+'), 'package',
     'This is the package name, e.g. luafilesystem. '
     },
-    { 'package version', version, satisfies('[%d%.%-]+'), 'version',
-    'A version of the package, in this form 0.6-1, where the "-1" is the rockspec version'
+    { 'package version', version, either(satisfies('[%d%.%-]+'),satisfies('scm%-%d+')), 'version',
+    'A version of the package, in this form 0.6-1 or scm-1, where the "-1" is the rockspec version'
     },
     { 'summary', '', any, 'description.summary',
     'A short one line summary of the package'
