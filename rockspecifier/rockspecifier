@@ -355,26 +355,26 @@ questions {
     { 'package name', base,  satisfies('[%w%-]+'), 'package',
     'This is the package name, e.g. luafilesystem. '
     },
-    { 'package version',version,satisfies('[%d%.%-]+'), 'version',
+    { 'package version', version, satisfies('[%d%.%-]+'), 'version',
     'A version of the package, in this form 0.6-1, where the "-1" is the rockspec version'
     },
-    { 'summary','',any, 'description.summary',
+    { 'summary', '', any, 'description.summary',
     'A short one line summary of the package'
     },
-    { 'detailed','',multiline,'description.detailed',
+    { 'detailed', '', multiline, 'description.detailed',
     'A descriptive paragraph describing the package'
     },
-    { 'license','MIT/X11',non_blank, 'description.license',
+    { 'license', 'MIT/X11', non_blank, 'description.license',
     'The licence under which this is released; the default is the same as for Lua itself'
     },
-    {"supported platforms "..platforms_string,'',non_blank_list,"supported_platforms",
+    {"supported platforms "..platforms_string, '', non_blank_list, "supported_platforms",
     "The platforms on which this package is valid (may be empty)"
     },    
-    { 'dependencies','',non_blank_list, per_platform 'dependencies',
+    { 'dependencies', '', non_blank_list, per_platform 'dependencies',
     'Any other LuaRocks packages which this package depends on'
     },
     --
-    { 'package directory',directory,existing_path,
+    { 'package directory', directory, existing_path,
     function(path)
         path = remove_trailing_slash(path)
         fullpath = path
@@ -397,7 +397,7 @@ questions {
     end,
     --
     loop {
-        {'module',module_default,non_blank_list,function(ls)
+        {'module', module_default, non_blank_list, function(ls)
             module_default[1] = 'n'
             if #ls > 1 then
                 mod.name,mod.type = ls[1],ls[2]
@@ -498,16 +498,16 @@ for m in modules:iter() do
             end),
             "Does your module depend on some external library, e.g readline/readline.h? Entering 'none' means no external libs etc"
             },
-            {'include paths','', non_blank_list, per_platform 'incdirs',
+            {'include paths', '',  non_blank_list, per_platform 'incdirs',
             'Are there any extra include paths needed?'
             },
-            {'external libraries','',non_blank_list, per_platform 'libraries',
+            {'external libraries', '', non_blank_list, per_platform 'libraries',
             'Any libraries that your module needs to link with'
             },
-            {'library directories','',non_blank_list, per_platform 'libdirs',
+            {'library directories', '', non_blank_list, per_platform 'libdirs',
             'Any extra library directories required',
             },
-            {'C defines','',non_blank_list, per_platform 'defines',
+            {'C defines', '', non_blank_list, per_platform 'defines',
             'Any C macro definitions, e.g. DEBUG NTRACE=2'
             },
         }
