@@ -577,7 +577,11 @@ end
 -- The modules have a field 'dir', so use the table lookup operator ...
 local src_dirs = Set(modules:map('[]','dir'))
 local all_dirs = List(dir.getdirectories(lfs.currentdir()))
-all_dirs = Set(all_dirs:map(basename))
+all_dirs = all_dirs:map(basename)
+all_dirs = all_dirs:filter(function(d) -- not interested in hidden files begining with .
+    return not d:match '^%.'
+end)
+all_dirs = Set(all_dirs)
 
 -- the difference between the sets is what we need; make it a list
 local other_dirs = (all_dirs - src_dirs):keys()
