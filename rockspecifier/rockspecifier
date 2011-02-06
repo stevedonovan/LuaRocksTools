@@ -277,7 +277,7 @@ local spec = {
     external_dependencies = {}
 }
 
-if true then -- experts prefer to edit the rockspec (was not easy_mode)
+if false then -- best to explicitly let user fill in description fields
 	local descript = spec.description
 	descript.summary = "short sentence about this package"
 	descript.detailed = "paragraph about this package\n"
@@ -352,7 +352,7 @@ local module_default = {'n'}
 
 questions {
     obj = spec,
-    { 'package name',base, satisfies('[%w%-]+'),'package',
+    { 'package name', base,  satisfies('[%w%-]+'), 'package',
     'This is the package name, e.g. luafilesystem. '
     },
     { 'package version',version,satisfies('[%d%.%-]+'), 'version',
