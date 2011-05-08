@@ -51,12 +51,12 @@ By default, the result is a table of basic information just as with `list`: that
 
 If `flags.all` is set to `true` then each item looks like this:
 
-    * `package` as before
-    *  `versions` which is a list of:
-       * `version` (highest version is first in the list)
-       * `repos` list of repo info:
-          * `repo`  the repository name
-          * `arch` one of "src", "rockspec" or "all"
+ * `package` as before
+ *  `versions` which is a list of:
+  * `version` (highest version is first in the list)
+  * `repos` list of repo info:
+   * `repo`  the repository name
+   * `arch` one of "src", "rockspec" or "all"
           
           
 
