@@ -54,9 +54,11 @@ If `flags.all` is set to `true` then each item looks like this:
  * `package` as before
  *  `versions` which is a list of:
   * `version` (highest version is first in the list)
-  * `repos` list of repo info:
-   * `repo`  the repository name
-   * `arch` one of "src", "rockspec" or "all"
+  * `repos` list of repo info
+
+where 'repo info' is:
+ * `repo`  the repository name
+ * `arch` one of "src", "rockspec" or "all"
           
           
 
