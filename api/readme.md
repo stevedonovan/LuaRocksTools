@@ -57,6 +57,7 @@ If `flags.all` is set to `true` then each item looks like this:
   * `repos` list of repo info
 
 where 'repo info' is:
+
  * `repo`  the repository name
  * `arch` one of "src", "rockspec" or "all"
           
