@@ -91,22 +91,21 @@ local manifests = {}
 -- @field version
 -- @field rock_dir the full path to the rock
 -- @field homepage
+-- @field maintainer
 -- @field license
 -- @field summary
 -- @field description
 -- @field build_type (this is the rockspec's build.type)
 -- @field modules modules provided by this package
 -- @field dependencies packages that this package needs
--- @class table
--- @name local_info_table
+-- @table local_info_table
 
 
 --- show information about an installed package.
 -- @param name the package name
 -- @param version version, may be nil
 -- @param field one of the output fields
--- @return a local info table, or a string if field is specified.
--- @see local_info_table
+-- @return @{local_info_table}, or a string if field is specified.
 function show(name,version,field)
    local res,err = list (name,version,{exact = true})
    if not res then return nil,err end
@@ -119,9 +118,11 @@ end
 --- list information about currently installed packages.
 -- @param pattern a string which is partially matched against packages
 -- @param version a specific version, may be nil.
--- @param flags
--- @return a list of local info tables
--- @see local_info_table
+-- @param flags. A table of boolean values with keys:
+--   - 'exact' treat the pattern as the exact name of a package
+--   - 'rockspec' don't want rockspec information
+--   - 'manifest' don't want manifest information
+-- @return list of @{local_info_table}
 function list(pattern,version,flags)
    local results = {}
    flags = flags or {}
@@ -148,18 +149,22 @@ function list(pattern,version,flags)
 
       local descript, minfo, build_type
       if flags.rockspec then
-           local rockspec_file = path.rockspec_file(name, version, repo)
-           local rockspec, err = fetch.load_local_rockspec(rockspec_file)
-           descript = rockspec.description
-           build_type = rockspec.build.type
+         local rockspec_file = path.rockspec_file(name, version, repo)
+         local rockspec, err = fetch.load_local_rockspec(rockspec_file)
+         if rockspec then
+            descript = rockspec.description
+            build_type = rockspec.build.type
+         end
       end
       if flags.manifest then
-           local manifest = manifests[repo_url]
-           if not manifest then -- cache these
-              manifest = manif.load_manifest(repo_url)
-              manifests[repo_url] = manifest
-            end
-           minfo = manifest.repository[name][version][1]
+         local manifest = manifests[repo_url]
+         if not manifest then -- cache these
+            manifest = manif.load_manifest(repo_url)
+            manifests[repo_url] = manifest
+         end
+         if manifest then
+            minfo = manifest.repository[name][version][1]
+         end
       end
 
       local entry =  {
@@ -169,6 +174,7 @@ function list(pattern,version,flags)
          rock_dir = directory,
          homepage = descript and descript.homepage,
          license = descript and descript.license,
+         maintainer = descript and descript.maintainer,
          summary = descript and descript.summary,
          description = descript and descript.detailed,
          build_type = build_type,
@@ -185,12 +191,40 @@ function list(pattern,version,flags)
 
 end
 
---- list information about installed packages, but return a map.
+function search_extra (info)
+   local url = path.make_url(info.repo,info.package,info.version,'rockspec')
+   local rockspec, err = fetch.load_rockspec(url)
+   if rockspec then
+      local descript = rockspec.description
+      info.homepage = descript.homepage
+      info.license = descript.license
+      info.maintainer = descript.maintainer
+      info.summary = descript.summary
+      info.description = descript.detailed
+      info.build_type = rockspec.build.type
+      local rdeps,odeps = rockspec.dependencies,{}
+      for i,rdep in ipairs(rdeps) do
+         odeps[i] = rdep.name
+      end
+      info.dependencies = odeps
+      -- guessing the modules: this can be a bit hit-and-miss
+      local build = rockspec.build
+      if build.type == 'builtin' then
+         info.modules = util.keys(build.modules)
+      elseif build.install and build.install.lua then
+         info.modules = util.keys(build.install.lua)
+      end
+      return true
+   else
+      return nil, err
+   end
+end
+
+--- list information like @{list}, but return as a map.
 -- @param pattern a string which is partially matched against packages
 -- @param version a specific version, may be nil.
--- @param flags
--- @return a table where the keys are package naems and values are local info tables
--- @see local_info_table
+-- @param flags (as with @{list})
+-- @return a table where the keys are package names and values are @{local_info_table}
 function list_map(pattern,version,flags)
    flags = flags or {}
    flags.map = true
@@ -201,24 +235,31 @@ end
 -- @param linfo local info table
 -- @param info server info table
 -- @return true if the package is out of date.
-function updated (linfo,info)
-   return deps.compare_versions(linfo.version,info.version)
+function compare_versions (linfo,info)
+   return deps.compare_versions(info.version,linfo.version)
 end
 
 --- search LuaRocks repositories for a package.
 -- @param pattern a string which is partially matched against packages
 -- @param version a specific version, may be nil.
--- @param flags a table with keys 'all' means get all version information,
--- 'from' to add another repository to the search and 'only_from' to only search
--- the given repository
--- @return a list of server information. Without 'all', we get package,version and
--- repo, where repo is the remote server. With 'all', instead of repo we get versions,
--- which is a list of {version,repos}.
+-- @param flags a table with keys
+--   - 'all' means get all version information,
+--   - 'from' to add another repository to the search
+--   - 'only_from' to only search one repository
+--   - 'details' get more information about each package
+-- @return a list of server information.
+--  - Without 'all', we get package, version and the remote server (repo)
+--  - With 'all', instead of the repo we get versions, which is a list of
+--     - version
+--     - repos
+--  - with 'details', you get pretty much what @{list} returns. Note that
+--  this function will then have to download the remote rockspec for this,
+--  and may not always be able to deduce the modules provided by a package.
 function search (pattern,version,flags)
    flags = flags or {}
    check_flags(flags)
    local query = _search.make_query((pattern or ''):lower(), version)
-   query.exact_name = false
+   query.exact_name = flags.exact == true
    local results, err = _search.search_repos(query)
    if not results then
       restore_flags(flags)
@@ -245,6 +286,9 @@ function search (pattern,version,flags)
             versions = vss
          }
       end
+      if flags.details then
+         search_extra(rec)
+      end
       if flags.map then
          res[package] = rec
       else
@@ -255,7 +299,7 @@ function search (pattern,version,flags)
    return res
 end
 
---- search LuaRocks repositories for a package, returning a map.
+--- search repositories like @{search}, but return a map.
 -- @param pattern a string which is partially matched against packages
 -- @param version a specific version, may be nil.
 -- @param flags
