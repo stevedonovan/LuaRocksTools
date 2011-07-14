@@ -1,6 +1,17 @@
 ----------------------
--- A simple external API for LuaRocks
+-- A simple external API for LuaRocks.
+-- This allows you to query the existing packages (@{show} and @{list}) and
+-- packages on a remote repository (@{search}). Like the luarocks command-line
+-- tool, you can specify the flags `from` and `only_from` for this function.
 --
+-- Local information is a table: @{local_info_table}.  Usually you get less
+-- information for remote queries (basically, package, version and repo) but setting the
+-- flag `details` for @{search} will fill in more fields by downloading the remote
+-- rockspecs - bear in mind that this can be slow for large queries.
+--
+-- It is also possible to install and remove packages. If you use the flag `quiet`, then
+-- normal output is suppressed and sent to a log file.
+
 module("luarocks.api", package.seeall)
 
 local util = require("luarocks.util")
@@ -47,7 +58,33 @@ function set_rocks_tree (make_local)
    use_tree(trees[is_local and 1 or #trees])
 end
 
-local old_print = _G.print
+local old_print,old_execute_string = _G.print, fs.execute_string
+local path_sep = package.config:sub(1,1)
+local log_dir = path_sep=='\\' and os.getenv('TEMP') or '/tmp'
+local log_name = log_dir..path_sep..'luarocks-api-log.txt'
+
+-- monkey-patching LR's execute!
+-- useful to suppress the chattiness of 7z on windows
+local function fs_quiet_execute_string(cmd)
+   cmd = cmd ..' >> '..log_name..' 2>&1'
+   if os.execute(cmd) == 0 then
+      return true
+   else
+      return false
+   end
+end
+
+local function logging_print (...)
+   local res,args,n = {},{...},select('#',...)
+   for i = 1,n do
+      res[i] = tostring(args[i])
+   end
+   res = table.concat(res,'\t')
+   local f = io.open(log_name,'a')
+   f:write(res,'\n')
+   f:close()
+end
+
 
 local function check_flags (flags)
    flags._old_servers = cfg.rocks_servers
@@ -63,7 +100,8 @@ local function check_flags (flags)
       cfg.rocks_servers = { flags.only_from }
    end
    if flags.quiet then
-      _G.print = function() end
+      _G.print = logging_print
+      fs.execute_string = fs_quiet_execute_string
    end
 end
 
@@ -78,6 +116,7 @@ local function restore_flags (flags)
    end
    if flags.quiet then
       _G.print = old_print
+      fs.execute_string = old_execute_string
    end
 end
 
@@ -85,7 +124,14 @@ set_rocks_tree(false)
 
 local manifests = {}
 
---- information returned by show and list.
+--- get the log file.
+-- This is used when the `quiet` flag is specified.
+-- @return full path to log file
+function get_log_file ()
+   return log_name
+end
+
+--- information returned by @{show} and @{list}.
 -- @field package canonical name
 -- @field repo the tree where found
 -- @field version
@@ -100,12 +146,22 @@ local manifests = {}
 -- @field dependencies packages that this package needs
 -- @table local_info_table
 
+--- known flag names for the `flags` parameter.
+-- @field exact (bool) query pattern is an exact name (default false)
+-- @field use_local use local rock tree, not global (default false)
+-- @field from include this URL in @{search}
+-- @field only_from only use this URL in @{search}
+-- @field all get all version info with @{search}
+-- @field quiet suppress output to stdout, write it all to a log file.
+-- Can use @{get_log_file} to find the name of the log.
+-- @table flags
 
 --- show information about an installed package.
 -- @param name the package name
 -- @param version version, may be nil
 -- @param field one of the output fields
 -- @return @{local_info_table}, or a string if field is specified.
+-- @see show.lua
 function show(name,version,field)
    local res,err = list (name,version,{exact = true})
    if not res then return nil,err end
@@ -118,10 +174,7 @@ end
 --- list information about currently installed packages.
 -- @param pattern a string which is partially matched against packages
 -- @param version a specific version, may be nil.
--- @param flags. A table of boolean values with keys:
---   - 'exact' treat the pattern as the exact name of a package
---   - 'rockspec' don't want rockspec information
---   - 'manifest' don't want manifest information
+-- @param flags @{flags}
 -- @return list of @{local_info_table}
 function list(pattern,version,flags)
    local results = {}
@@ -132,10 +185,14 @@ function list(pattern,version,flags)
    local query = _search.make_query(pattern, version)
    query.exact_name = flags.exact == true
 
+   -- older versions of 2.0 have different semantics for path.install_dir;
+   -- you had to pass the full path of the tree, not its root
+   local old_vs = deps.compare_versions("2.0.2",cfg.program_version)
+
    local tree_map = {}
    for _, tree in ipairs(cfg.rocks_trees) do
       local rocks_dir = path.rocks_dir(tree)
-      tree_map[rocks_dir] = tree
+      tree_map[rocks_dir] = old_vs and rocks_dir or tree
       _search.manifest_search(results, rocks_dir, query)
    end
 
@@ -144,7 +201,7 @@ function list(pattern,version,flags)
    local res = {}
    for name,versions in util.sortedpairs(results) do
       local version,repo_url = _latest(versions,false)
-      local repo =  tree_map[repo_url] -- repo_url
+      local repo =  tree_map[repo_url]
       local directory = path.install_dir(name,version,repo)
 
       local descript, minfo, build_type
@@ -207,12 +264,15 @@ function search_extra (info)
          odeps[i] = rdep.name
       end
       info.dependencies = odeps
-      -- guessing the modules: this can be a bit hit-and-miss
+      -- guessing the modules: this can be hit-and-miss
+      -- It will often not work for the 'make' build type
       local build = rockspec.build
       if build.type == 'builtin' then
-         info.modules = util.keys(build.modules)
+         local mods = build.modules
+         info.modules = #mods > 0 and mods or util.keys(mods)
       elseif build.install and build.install.lua then
-         info.modules = util.keys(build.install.lua)
+         local mods = build.install.lua
+         info.modules = #mods > 0 and mods or util.keys(mods)
       end
       return true
    else
@@ -223,7 +283,7 @@ end
 --- list information like @{list}, but return as a map.
 -- @param pattern a string which is partially matched against packages
 -- @param version a specific version, may be nil.
--- @param flags (as with @{list})
+-- @param flags @{flags}
 -- @return a table where the keys are package names and values are @{local_info_table}
 function list_map(pattern,version,flags)
    flags = flags or {}
@@ -232,6 +292,7 @@ function list_map(pattern,version,flags)
 end
 
 --- is this package outdated?.
+-- @{check.lua} shows how to compare installed and available packages.
 -- @param linfo local info table
 -- @param info server info table
 -- @return true if the package is out of date.
@@ -242,7 +303,7 @@ end
 --- search LuaRocks repositories for a package.
 -- @param pattern a string which is partially matched against packages
 -- @param version a specific version, may be nil.
--- @param flags a table with keys
+-- @param flags @{flags} a table with keys
 --   - 'all' means get all version information,
 --   - 'from' to add another repository to the search
 --   - 'only_from' to only search one repository
@@ -255,6 +316,7 @@ end
 --  - with 'details', you get pretty much what @{list} returns. Note that
 --  this function will then have to download the remote rockspec for this,
 --  and may not always be able to deduce the modules provided by a package.
+-- @see search.lua
 function search (pattern,version,flags)
    flags = flags or {}
    check_flags(flags)
@@ -302,7 +364,7 @@ end
 --- search repositories like @{search}, but return a map.
 -- @param pattern a string which is partially matched against packages
 -- @param version a specific version, may be nil.
--- @param flags
+-- @param flags @{flags}
 -- @return a table of server information indexed by package name.
 function search_map(pattern,version,flags)
    flags = flags or {}
@@ -313,8 +375,8 @@ end
 --- install a rock.
 -- @param name
 -- @param version can ask for a specific version (default nil means get latest)
--- @param flags a table with keys 'use_local' to install to local tree,
--- 'from' to add another repository to the search and 'only_from' to only use
+-- @param flags @{flags} `use_local` to install to local tree,
+-- `from` to add another repository to the search and `only_from` to only use
 -- the given repository
 -- @return true if successful, nil if not.
 -- @return error message if not

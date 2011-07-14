@@ -19,7 +19,7 @@ end
 -- use your favourite table dumper here...
 require 'pl.pretty'.dump(res)
 
---[[-- output
+--[=[-- output
 $> lua show.lua lua2json
 {
   package = "lua2json",
@@ -62,4 +62,4 @@ Also contains a HMAC implementation in Lua.
     "sha2"
   },
   summary = "Lua binding for Aaron Gifford's SHA-2 implementation"}
-]]
+]=]
